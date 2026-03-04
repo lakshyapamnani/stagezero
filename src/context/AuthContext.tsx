@@ -1,14 +1,14 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
-import { 
-  User as FirebaseUser, 
-  onAuthStateChanged, 
-  signInWithEmailAndPassword, 
-  createUserWithEmailAndPassword, 
+import {
+  User as FirebaseUser,
+  onAuthStateChanged,
+  signInWithEmailAndPassword,
+  createUserWithEmailAndPassword,
   signInWithPopup,
   signOut as firebaseSignOut,
   updateProfile
 } from 'firebase/auth';
-import { doc, getDoc, setDoc } from 'firebase/firestore';
+import { ref, get, set, child } from 'firebase/database';
 import { auth, db, googleProvider } from '../lib/firebase';
 import { User, Role } from '../models/types';
 
@@ -32,15 +32,16 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
       if (firebaseUser) {
         try {
-          // Fetch user profile from Firestore
-          const userDoc = await getDoc(doc(db, 'users', firebaseUser.uid));
-          if (userDoc.exists()) {
-            setCurrentUser(userDoc.data() as User);
+          // Fetch user profile from RTDB
+          const userRef = ref(db, `users/${firebaseUser.uid}`);
+          const userSnap = await get(userRef);
+          if (userSnap.exists()) {
+            setCurrentUser(userSnap.val() as User);
           } else {
-            // Fallback if document doesn't exist yet (shouldn't happen in normal flow)
-            console.error('User document not found');
-            // Don't set null here immediately, as it might be created in the next step of loginWithGoogle
-            // But for now, if it's missing, we can't really do much.
+            // During registration, the auth state changes BEFORE the user document is created.
+            // We just wait for the subsequent sign-in or manual state update by the `register` function.
+            // Returning early prevents the console error and null set.
+            return;
           }
         } catch (error) {
           console.error('Error fetching user profile:', error);
@@ -56,18 +57,40 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   }, []);
 
   const login = async (email: string, password: string) => {
-    await signInWithEmailAndPassword(auth, email, password);
+    const userCredential = await signInWithEmailAndPassword(auth, email, password);
+    const firebaseUser = userCredential.user;
+
+    // Wait to fetch the user profile from RTDB so we can properly redirect
+    const userRef = ref(db, `users/${firebaseUser.uid}`);
+    const userSnap = await get(userRef);
+
+    if (userSnap.exists()) {
+      setCurrentUser(userSnap.val() as User);
+    } else {
+      // In the rare case that auth succeeded but user document is missing,
+      // create a minimal fallback to avoid hanging the UI or redirect loops.
+      setCurrentUser({
+        id: firebaseUser.uid,
+        name: firebaseUser.displayName || 'User',
+        email: firebaseUser.email || '',
+        role: 'freelancer', // Default fallback
+        bio: '',
+        skills: [],
+        availability: '',
+        createdAt: new Date().toISOString(),
+      });
+    }
   };
 
   const loginWithGoogle = async (role: Role = 'freelancer') => {
     const result = await signInWithPopup(auth, googleProvider);
     const firebaseUser = result.user;
-    
+
     // Check if user exists
-    const userDocRef = doc(db, 'users', firebaseUser.uid);
-    const userDoc = await getDoc(userDocRef);
-    
-    if (!userDoc.exists()) {
+    const userRef = ref(db, `users/${firebaseUser.uid}`);
+    const userSnap = await get(userRef);
+
+    if (!userSnap.exists()) {
       // Create new user if not exists
       const newUser: User = {
         id: firebaseUser.uid,
@@ -80,11 +103,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         avatar: firebaseUser.photoURL || undefined,
         createdAt: new Date().toISOString(),
       };
-      
-      await setDoc(userDocRef, newUser);
+
+      await set(userRef, newUser);
       setCurrentUser(newUser);
     } else {
-      setCurrentUser(userDoc.data() as User);
+      setCurrentUser(userSnap.val() as User);
     }
   };
 
@@ -105,8 +128,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       createdAt: new Date().toISOString(),
     };
 
-    // Create user document in Firestore
-    await setDoc(doc(db, 'users', firebaseUser.uid), newUser);
+    // Create user document in RTDB
+    await set(ref(db, `users/${firebaseUser.uid}`), newUser);
     setCurrentUser(newUser);
   };
 
@@ -116,14 +139,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   return (
-    <AuthContext.Provider value={{ 
-      currentUser, 
-      isAuthenticated: !!currentUser, 
-      isLoading, 
-      login, 
+    <AuthContext.Provider value={{
+      currentUser,
+      isAuthenticated: !!currentUser,
+      isLoading,
+      login,
       loginWithGoogle,
-      register, 
-      logout 
+      register,
+      logout
     }}>
       {!isLoading && children}
     </AuthContext.Provider>

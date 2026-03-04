@@ -1,31 +1,35 @@
-import { 
-  collection, 
-  doc, 
-  getDoc, 
-  getDocs, 
-  setDoc, 
-  updateDoc, 
-  addDoc, 
-  query, 
-  where, 
-  orderBy, 
-  onSnapshot,
-  deleteDoc
-} from 'firebase/firestore';
+import {
+  ref,
+  get,
+  set,
+  update,
+  push,
+  remove,
+  query,
+  orderByChild,
+  equalTo,
+  onValue,
+  off
+} from 'firebase/database';
 import { db } from '../lib/firebase';
 import { User, Startup, Application, Conversation, Message } from '../models/types';
 
 // Generic Helpers
 const getCollection = async <T>(collectionName: string) => {
-  const querySnapshot = await getDocs(collection(db, collectionName));
-  return querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as T));
+  const collectionRef = ref(db, collectionName);
+  const snapshot = await get(collectionRef);
+  if (snapshot.exists()) {
+    const data = snapshot.val();
+    return Object.keys(data).map(key => ({ id: key, ...data[key] } as T));
+  }
+  return [];
 };
 
 const getById = async <T>(collectionName: string, id: string) => {
-  const docRef = doc(db, collectionName, id);
-  const docSnap = await getDoc(docRef);
-  if (docSnap.exists()) {
-    return { id: docSnap.id, ...docSnap.data() } as T;
+  const docRef = ref(db, `${collectionName}/${id}`);
+  const snapshot = await get(docRef);
+  if (snapshot.exists()) {
+    return { id: snapshot.key, ...snapshot.val() } as T;
   }
   return null;
 };
@@ -66,13 +70,18 @@ export const userService = {
   getAll: () => getCollection<User>('users'),
   getById: (id: string) => getById<User>('users', id),
   update: async (id: string, data: Partial<User>) => {
-    const userRef = doc(db, 'users', id);
-    await updateDoc(userRef, data);
+    const userRef = ref(db, `users/${id}`);
+    await update(userRef, data);
   },
   getFreelancers: async () => {
-    const q = query(collection(db, 'users'), where('role', '==', 'freelancer'));
-    const querySnapshot = await getDocs(q);
-    return querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as User));
+    const usersRef = ref(db, 'users');
+    const q = query(usersRef, orderByChild('role'), equalTo('freelancer'));
+    const snapshot = await get(q);
+    if (snapshot.exists()) {
+      const data = snapshot.val();
+      return Object.keys(data).map(key => ({ id: key, ...data[key] } as User));
+    }
+    return [];
   }
 };
 
@@ -81,58 +90,80 @@ export const startupService = {
   getAll: () => getCollection<Startup>('startups'),
   getById: (id: string) => getById<Startup>('startups', id),
   create: async (data: Omit<Startup, 'id'>) => {
-    const docRef = await addDoc(collection(db, 'startups'), data);
-    return { id: docRef.id, ...data };
+    const startupsRef = ref(db, 'startups');
+    const newRef = push(startupsRef);
+    await set(newRef, data);
+    return { id: newRef.key as string, ...data };
   },
   update: async (id: string, data: Partial<Startup>) => {
-    const docRef = doc(db, 'startups', id);
-    await updateDoc(docRef, data);
+    const startupRef = ref(db, `startups/${id}`);
+    await update(startupRef, data);
   },
   getByFounderId: async (founderId: string) => {
-    const q = query(collection(db, 'startups'), where('founderId', '==', 'founderId'));
-    const querySnapshot = await getDocs(q);
-    return querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Startup));
+    const startupsRef = ref(db, 'startups');
+    const q = query(startupsRef, orderByChild('founderId'), equalTo(founderId)); // Fixed typo here as well from the original "founderId" query
+    const snapshot = await get(q);
+    if (snapshot.exists()) {
+      const data = snapshot.val();
+      return Object.keys(data).map(key => ({ id: key, ...data[key] } as Startup));
+    }
+    return [];
   }
 };
 
 // Application Service
 export const applicationService = {
   create: async (data: Omit<Application, 'id'>) => {
-    const docRef = await addDoc(collection(db, 'applications'), data);
-    return { id: docRef.id, ...data };
+    const appsRef = ref(db, 'applications');
+    const newRef = push(appsRef);
+    await set(newRef, data);
+    return { id: newRef.key as string, ...data };
   },
   getByStartupId: async (startupId: string) => {
-    const q = query(collection(db, 'applications'), where('startupId', '==', startupId));
-    const querySnapshot = await getDocs(q);
-    return querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Application));
+    const appsRef = ref(db, 'applications');
+    const q = query(appsRef, orderByChild('startupId'), equalTo(startupId));
+    const snapshot = await get(q);
+    if (snapshot.exists()) {
+      const data = snapshot.val();
+      return Object.keys(data).map(key => ({ id: key, ...data[key] } as Application));
+    }
+    return [];
   },
   getByFreelancerId: async (freelancerId: string) => {
-    const q = query(collection(db, 'applications'), where('freelancerId', '==', freelancerId));
-    const querySnapshot = await getDocs(q);
-    return querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Application));
+    const appsRef = ref(db, 'applications');
+    const q = query(appsRef, orderByChild('freelancerId'), equalTo(freelancerId));
+    const snapshot = await get(q);
+    if (snapshot.exists()) {
+      const data = snapshot.val();
+      return Object.keys(data).map(key => ({ id: key, ...data[key] } as Application));
+    }
+    return [];
   },
   updateStatus: async (id: string, status: Application['status']) => {
-    const docRef = doc(db, 'applications', id);
-    await updateDoc(docRef, { status });
+    const appRef = ref(db, `applications/${id}`);
+    await update(appRef, { status });
   }
 };
 
 // Chat Service
 export const chatService = {
   createConversation: async (participants: string[]) => {
-    // Check if conversation exists
-    const q = query(
-      collection(db, 'conversations'), 
-      where('participants', 'array-contains', participants[0])
-    );
-    const querySnapshot = await getDocs(q);
-    const existing = querySnapshot.docs.find(doc => {
-      const data = doc.data() as Conversation;
-      return data.participants.includes(participants[1]);
-    });
+    const convsRef = ref(db, 'conversations');
+    const snapshot = await get(convsRef);
+
+    let existing;
+    if (snapshot.exists()) {
+      const data = snapshot.val();
+      const docs = Object.keys(data).map(key => ({ id: key, ...data[key] } as Conversation));
+      existing = docs.find(doc =>
+        doc.participants &&
+        doc.participants.includes(participants[0]) &&
+        doc.participants.includes(participants[1])
+      );
+    }
 
     if (existing) {
-      return { id: existing.id, ...existing.data() } as Conversation;
+      return existing;
     }
 
     const newConv: Omit<Conversation, 'id'> = {
@@ -143,28 +174,38 @@ export const chatService = {
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString()
     };
-    const docRef = await addDoc(collection(db, 'conversations'), newConv);
-    return { id: docRef.id, ...newConv };
+
+    const newRef = push(convsRef);
+    await set(newRef, newConv);
+    return { id: newRef.key as string, ...newConv };
   },
-  
+
   getUserConversations: async (userId: string) => {
-    const q = query(
-      collection(db, 'conversations'), 
-      where('participants', 'array-contains', userId),
-      orderBy('lastMessageAt', 'desc')
-    );
-    const snapshot = await getDocs(q);
-    return snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Conversation));
+    const convsRef = ref(db, 'conversations');
+    const snapshot = await get(convsRef);
+
+    if (snapshot.exists()) {
+      const data = snapshot.val();
+      const docs = Object.keys(data).map(key => ({ id: key, ...data[key] } as Conversation));
+
+      return docs
+        .filter(doc => doc.participants && doc.participants.includes(userId))
+        .sort((a, b) => new Date(b.lastMessageAt).getTime() - new Date(a.lastMessageAt).getTime());
+    }
+    return [];
   },
 
   getMessages: async (conversationId: string) => {
-    const q = query(
-      collection(db, 'messages'), 
-      where('conversationId', '==', conversationId),
-      orderBy('createdAt', 'asc')
-    );
-    const snapshot = await getDocs(q);
-    return snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Message));
+    const msgsRef = ref(db, 'messages');
+    const q = query(msgsRef, orderByChild('conversationId'), equalTo(conversationId));
+    const snapshot = await get(q);
+
+    if (snapshot.exists()) {
+      const data = snapshot.val();
+      const docs = Object.keys(data).map(key => ({ id: key, ...data[key] } as Message));
+      return docs.sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+    }
+    return [];
   },
 
   sendMessage: async (data: Omit<Message, 'id'>) => {
@@ -172,54 +213,74 @@ export const chatService = {
       ...data,
       read: false
     };
-    const docRef = await addDoc(collection(db, 'messages'), message);
-    
+
+    const msgsRef = ref(db, 'messages');
+    const newRef = push(msgsRef);
+    await set(newRef, message);
+
     // Update conversation
-    const convRef = doc(db, 'conversations', data.conversationId);
-    await updateDoc(convRef, {
+    const convRef = ref(db, `conversations/${data.conversationId}`);
+    await update(convRef, {
       lastMessage: data.content,
       lastMessageAt: data.createdAt,
       updatedAt: data.createdAt
     });
 
-    return { id: docRef.id, ...message };
+    return { id: newRef.key as string, ...message };
   },
 
   subscribeToConversations: (userId: string, callback: (convs: Conversation[]) => void) => {
-    const q = query(
-      collection(db, 'conversations'), 
-      where('participants', 'array-contains', userId),
-      orderBy('lastMessageAt', 'desc')
-    );
-    return onSnapshot(q, (snapshot) => {
-      const convs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Conversation));
-      callback(convs);
+    const convsRef = ref(db, 'conversations');
+
+    const listener = onValue(convsRef, (snapshot) => {
+      if (snapshot.exists()) {
+        const data = snapshot.val();
+        const docs = Object.keys(data).map(key => ({ id: key, ...data[key] } as Conversation));
+
+        const userConvs = docs
+          .filter(doc => doc.participants && doc.participants.includes(userId))
+          .sort((a, b) => new Date(b.lastMessageAt).getTime() - new Date(a.lastMessageAt).getTime());
+
+        callback(userConvs);
+      } else {
+        callback([]);
+      }
     });
+
+    return () => off(convsRef, 'value', listener);
   },
 
   subscribeToMessages: (conversationId: string, callback: (msgs: Message[]) => void) => {
-    const q = query(
-      collection(db, 'messages'), 
-      where('conversationId', '==', conversationId),
-      orderBy('createdAt', 'asc')
-    );
-    return onSnapshot(q, (snapshot) => {
-      const msgs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Message));
-      callback(msgs);
+    const msgsRef = ref(db, 'messages');
+    const q = query(msgsRef, orderByChild('conversationId'), equalTo(conversationId));
+
+    const listener = onValue(q, (snapshot) => {
+      if (snapshot.exists()) {
+        const data = snapshot.val();
+        const docs = Object.keys(data).map(key => ({ id: key, ...data[key] } as Message));
+        const sortedMsgs = docs.sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+        callback(sortedMsgs);
+      } else {
+        callback([]);
+      }
     });
+
+    return () => off(q, 'value', listener);
   },
 
-  createOffer: async (data: Omit<Offer, 'id'>) => {
-    const docRef = await addDoc(collection(db, 'offers'), data);
-    return { id: docRef.id, ...data };
+  createOffer: async (data: any) => {
+    const offersRef = ref(db, 'offers');
+    const newRef = push(offersRef);
+    await set(newRef, data);
+    return { id: newRef.key as string, ...data };
   },
 
   getOfferById: async (id: string) => {
-    return getById<Offer>('offers', id);
+    return getById<any>('offers', id);
   },
 
-  updateOfferStatus: async (id: string, status: Offer['status']) => {
-    const docRef = doc(db, 'offers', id);
-    await updateDoc(docRef, { status });
+  updateOfferStatus: async (id: string, status: any) => {
+    const offerRef = ref(db, `offers/${id}`);
+    await update(offerRef, { status });
   }
 };

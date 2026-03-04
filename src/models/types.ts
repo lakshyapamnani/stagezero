@@ -9,6 +9,7 @@ export interface User {
   skills: string[];
   availability: string;
   createdAt: string;
+  avatar?: string;
 }
 
 export type StartupStage = 'Idea' | 'MVP' | 'Revenue';
@@ -58,6 +59,9 @@ export interface Conversation {
   participants: string[]; // User IDs
   createdAt: string;
   updatedAt: string;
+  lastMessage?: string;
+  lastMessageAt?: string;
+  unreadCount?: number;
 }
 
 export type MessageType = 'text' | 'offer';
